@@ -1,0 +1,90 @@
+tests:
+  - name: firewall UFW bloqueado a OCSF
+    inputs:
+      - insert_at: fw_ocsf
+        type: log
+        log_fields:
+          host: fw01
+          message: "[UFW BLOCK] IN=eth0 OUT= MAC=00:16:3e:aa:bb:cc:00:16:3e:dd:ee:ff:08:00 SRC=203.0.113.5 DST=10.0.0.2 LEN=40 TOS=0x00 PREC=0x00 TTL=245 ID=54321 PROTO=TCP SPT=44321 DPT=22 WINDOW=1024 RES=0x00 SYN URGP=0"
+    outputs:
+      - extract_from: fw_ocsf
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.class_uid, 4001)
+              assert_eq!(.type_uid, 400105)
+              assert_eq!(.action_id, 2)
+              assert_eq!(.src_endpoint.ip, "203.0.113.5")
+              assert_eq!(.src_endpoint.port, 44321)
+              assert_eq!(.dst_endpoint.port, 22)
+              assert_eq!(.connection_info.protocol_num, 6)
+              assert_eq!(.connection_info.direction_id, 1)
+              assert_eq!(.device.hostname, "fw01")
+
+  - name: firewall UFW permitido de salida a OCSF
+    inputs:
+      - insert_at: fw_ocsf
+        type: log
+        log_fields:
+          host: fw01
+          message: "[UFW ALLOW] IN= OUT=eth0 SRC=10.0.0.2 DST=198.51.100.7 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=1234 DF PROTO=UDP SPT=5353 DPT=53 LEN=40"
+    outputs:
+      - extract_from: fw_ocsf
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.type_uid, 400106)
+              assert_eq!(.action_id, 1)
+              assert_eq!(.connection_info.protocol_num, 17)
+              assert_eq!(.connection_info.direction_id, 2)
+              assert_eq!(.dst_endpoint.ip, "198.51.100.7")
+              assert!(!exists(.src_endpoint.interface_name))
+
+  - name: firewall descarta lineas que no son del cortafuegos
+    inputs:
+      - insert_at: fw_ocsf
+        type: log
+        log_fields:
+          host: fw01
+          message: "usb 1-1: new high-speed USB device number 2 using xhci_hcd"
+    no_outputs_from:
+      - fw_ocsf
+
+  - name: EDR osquery proceso a OCSF
+    inputs:
+      - insert_at: edr_ocsf
+        type: log
+        log_fields:
+          message: '{"name":"edr_procesos","hostIdentifier":"ws-01","calendarTime":"Wed Nov 11 10:15:02 2026 UTC","unixTime":1794392102,"epoch":0,"counter":3,"numerics":false,"columns":{"cmdline":"curl http://198.51.100.7/a.sh","name":"curl","parent":"2211","path":"/usr/bin/curl","pid":"4312","sha256":"E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855","uid":"1000","username":"ana"},"action":"added"}'
+    outputs:
+      - extract_from: edr_ocsf
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.class_uid, 1007)
+              assert_eq!(.type_uid, 100701)
+              assert_eq!(.time, 1794392102000)
+              assert_eq!(.process.pid, 4312)
+              assert_eq!(.process.parent_process.pid, 2211)
+              assert_eq!(.process.file.hashes[0].value, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+              assert_eq!(.device.hostname, "ws-01")
+
+  - name: red Zeek conn a OCSF
+    inputs:
+      - insert_at: net_ocsf
+        type: log
+        log_fields:
+          message: '{"ts":1794392102.123456,"uid":"CHhAvVGS1DHFjwGM9","id.orig_h":"10.0.0.15","id.orig_p":51234,"id.resp_h":"198.51.100.7","id.resp_p":443,"proto":"tcp","service":"ssl","duration":2.5,"orig_bytes":1200,"resp_bytes":5400,"conn_state":"SF","orig_pkts":12,"resp_pkts":10}'
+    outputs:
+      - extract_from: net_ocsf
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.class_uid, 4001)
+              assert_eq!(.type_uid, 400106)
+              assert_eq!(.time, 1794392102123)
+              assert_eq!(.duration, 2500)
+              assert_eq!(.src_endpoint.ip, "10.0.0.15")
+              assert_eq!(.dst_endpoint.port, 443)
+              assert_eq!(.traffic.bytes_in, 5400)
+              assert_eq!(.connection_info.uid, "CHhAvVGS1DHFjwGM9")

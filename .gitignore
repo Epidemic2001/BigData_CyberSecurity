@@ -1,0 +1,11 @@
+# Claves de API
+.env
+
+# Logs locales de osquery y Zeek
+logs/**
+!logs/**/
+!logs/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc

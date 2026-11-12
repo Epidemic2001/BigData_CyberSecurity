@@ -1,0 +1,66 @@
+sources:
+  net_zeek:
+    type: file
+    include:
+      - /var/log/zeek/conn.log
+    read_from: beginning
+
+transforms:
+  net_ocsf:
+    type: remap
+    inputs: [net_zeek]
+    drop_on_error: true
+    source: |
+      e = object!(parse_json!(string!(.message)))
+
+      origen = e."id.orig_h"
+      destino = e."id.resp_h"
+      if is_null(origen) || is_null(destino) {
+        abort
+      }
+
+      proto = downcase(string(e.proto) ?? "")
+      proto_num = if proto == "tcp" { 6 } else if proto == "udp" { 17 } else if proto == "icmp" { 1 } else { 0 }
+      estado = string(e.conn_state) ?? ""
+      activity_id = if estado == "REJ" { 5 } else if estado == "S0" { 4 } else if estado == "RSTO" || estado == "RSTR" { 3 } else { 6 }
+      activity_name = if activity_id == 5 { "Refuse" } else if activity_id == 4 { "Fail" } else if activity_id == 3 { "Reset" } else { "Traffic" }
+
+      . = {
+        "category_uid": 4,
+        "category_name": "Network Activity",
+        "class_uid": 4001,
+        "class_name": "Network Activity",
+        "activity_id": activity_id,
+        "activity_name": activity_name,
+        "type_uid": 400100 + activity_id,
+        "time": to_int(to_float!(e.ts) * 1000),
+        "duration": to_int((to_float(e.duration) ?? 0.0) * 1000),
+        "severity_id": 1,
+        "src_endpoint": { "ip": origen, "port": e."id.orig_p" },
+        "dst_endpoint": { "ip": destino, "port": e."id.resp_p" },
+        "connection_info": { "uid": e.uid, "protocol_num": proto_num, "protocol_name": proto },
+        "app_name": e.service,
+        "traffic": {
+          "bytes_out": e.orig_bytes,
+          "bytes_in": e.resp_bytes,
+          "packets_out": e.orig_pkts,
+          "packets_in": e.resp_pkts
+        },
+        "metadata": {
+          "version": "1.3.0",
+          "log_name": "network",
+          "product": { "name": "Zeek", "vendor_name": "Zeek" }
+        }
+      }
+      . = compact(.)
+
+sinks:
+  kafka_network:
+    type: kafka
+    inputs: [net_ocsf]
+    bootstrap_servers: kafka:9092
+    topic: ocsf.network
+    key_field: src_endpoint.ip
+    compression: lz4
+    encoding:
+      codec: json
